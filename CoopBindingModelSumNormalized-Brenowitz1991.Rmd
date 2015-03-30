@@ -1,0 +1,121 @@
+# Cooperative binding models for DNA-protein interactions
+
+Edward Wallace, based on Aarti Venkat's R code.
+
+In R markdown format: to compile and run code, open .Rmd file in Rstudio and press "Knit HTML"
+
+## Load R packages
+    
+```{r}
+library("nls2")
+library("reshape2")
+library("ggplot2")
+theme_set(theme_bw())
+```
+
+## Load sum-normalized data and assemble into data frame
+    
+```{r}
+#5.6 uM data ancerr erre61pal, here it is
+newconc<- c( 0.0,2.7,5.4,11.7,26.1,38.7,58.5,88.2,197.1,444.6,666.9,1500.3,2250.0,3375.0,5062.5)
+# newconc <- newconc*0.9 # why multiply by 0.9?
+fbound0 <- c(1,1,1, 0.994,0.989,0.968,0.924,0.634,0.032,0.0139,0,0,0,0,0)
+fbound1 <- c(0,0,0,0.006,0.0103,0.0315,0.0752, 0.313,0.042,0.007,0,0,0,0,0)
+fbound2 <- c(0, 0, 0, 0, 0, 0, 0, 0.0523,0.925,0.978, 1, 1, 1, 1, 1)
+
+# package into "wide" data frame with one column per variable, one row per concentration
+erre61pal_df_wide <- data.frame(conc=newconc,fbound0,fbound1,fbound2)
+
+
+```
+
+## Functions to reshape and plot data
+
+```{r}
+make_fbounddf_long <- function(fbdf) {
+    # reshape into "long" dataframe with one row per observation
+    # output is almost identical to "combineddata"
+    melteddf <- melt(fbdf,id.vars="conc",value.name ="fraction_bound",variable.name="n_prot")
+    # awkward conversion of n_prot from name (e.g. fbound0) to n_prot count (e.g. 0)
+    melteddf$n_prot <- as.integer(gsub("fbound","",as.character(melteddf$n_prot)))
+    return(melteddf)
+    }
+
+plot_fbound <- function(fbound_df, title="fbound vs protein concentration") {
+    ggplot(data=fbound_df,aes(x=conc,colour=factor(n_prot))) +
+        geom_point(aes(y=fraction_bound)) +
+        scale_x_log10() +
+        scale_colour_manual("n bound", values=c("0"="red","1"="blue","2"="green2")) +
+        labs(title=title,x="concentration (uM?)",y="fraction bound")
+    }
+```
+
+## Actually plot the data
+
+```{r,fig.width=9,fig.height=4}
+erre61pal_df <- make_fbounddf_long(erre61pal_df_wide)
+str(erre61pal_df)
+head(erre61pal_df)
+
+plot_fbound(erre61pal_df,"AncERR ERRE61Pal")
+```
+
+## Function to fit data to Brenowitz 1991 model
+
+Tested by fitting with made-up parameters.
+
+```{r,fig.width=9,fig.height=4}
+combined_fit_natscale <- function(conc,n_prot,ki,k12,conc.min){
+    conc.adj <- pmax(conc - conc.min, 0 ) # Why is this needed?
+    Z <- (1 + 2*ki*conc.adj + ki^2*k12*conc.adj^2)
+    fbound_fit_unnorm <-  
+        (2*ki*conc.adj) ^ (n_prot==1) * 
+        (ki^2*k12*conc.adj^2) ^(n_prot==2) 
+    fbound_fit_unnorm/Z
+    }
+
+
+plot_fbound_fit <- function(fbound_df, title="fbound vs protein concentration",
+                            mycoef=c(ki=0.01,k12=1,conc.min=20)) {
+    # plot fraction bound AND fitted data with mycoef
+    fbound_df$predicted_fbound <- with(erre61pal_df,combined_fit_natscale(conc,n_prot,
+                                                                ki=mycoef[1],k12=mycoef[2],conc.min=mycoef[3]))
+    # automatically add params to title
+    newtitle <- paste(title,
+                      "\nki=",round(mycoef[1],3),
+                      ", k12=",round(mycoef[2],3),
+                      ", conc.min=",round(mycoef[3],1),sep="")
+    plot_fbound(fbound_df, newtitle) + 
+        geom_line(aes(y=predicted_fbound),linetype="dashed")
+    }
+
+# test function and fit with arbitrary parameters   
+plot_fbound_fit(erre61pal_df,"AncERR ERRE61Pal") 
+```
+
+## Fit the data by nls and plot the fit
+
+```{r,fig.width=9,fig.height=4}
+# initial values
+
+combined_model <- fraction_bound ~ combined_fit_natscale(conc,n_prot,ki,k12,conc.min)
+
+# brute force fit (what is this for?)
+start_params <- data.frame(ki=c(0.001,0.1),k12=c(1,20),conc.min=c(15,150))
+fit_brute <- nls2(combined_model,data=erre61pal_df,start=start_params, algorithm="brute-force")
+
+# iterative non-linear least squares fit
+start_param <- data.frame(ki=0.01,k12=1,conc.min=20)
+fit_combined_Gmin_nls2 <- nls2(combined_model,start=start_param,data=erre61pal_df,
+                               control=nls.control(warnOnly=TRUE, maxiter=1000))
+
+plot_fbound_fit(erre61pal_df,"AncERR ERRE61Pal, nls fit",mycoef=coef(fit_combined_Gmin_nls2)) 
+
+```
+
+## Do next
+* Simulate data with noise
+* Plot residuals
+* Try not-sum-normalized data
+
+
