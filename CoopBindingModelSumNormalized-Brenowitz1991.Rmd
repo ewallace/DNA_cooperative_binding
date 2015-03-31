@@ -10,6 +10,7 @@ In R markdown format: to compile and run code, open .Rmd file in Rstudio and pre
 library("nls2")
 library("reshape2")
 library("ggplot2")
+library("plyr")
 theme_set(theme_bw())
 ```
 
@@ -42,8 +43,8 @@ make_fbounddf_long <- function(fbdf) {
     }
 
 plot_fbound <- function(fbound_df, title="fbound vs protein concentration") {
-    ggplot(data=fbound_df,aes(x=conc,colour=factor(n_prot))) +
-        geom_point(aes(y=fraction_bound)) +
+    ggplot(data=fbound_df,aes(x=conc,y=fraction_bound,colour=factor(n_prot))) +
+        geom_point() +
         scale_x_log10() +
         scale_colour_manual("n bound", values=c("0"="red","1"="blue","2"="green2")) +
         labs(title=title,x="concentration (uM?)",y="fraction bound")
@@ -76,21 +77,63 @@ combined_fit_natscale <- function(conc,n_prot,ki,k12,conc.min){
 
 
 plot_fbound_fit <- function(fbound_df, title="fbound vs protein concentration",
-                            mycoef=c(ki=0.01,k12=1,conc.min=20)) {
-    # plot fraction bound AND fitted data with mycoef
-    fbound_df$predicted_fbound <- with(erre61pal_df,combined_fit_natscale(conc,n_prot,
-                                                                ki=mycoef[1],k12=mycoef[2],conc.min=mycoef[3]))
+                            mycoef=c(ki=0.01,k12=1,conc.min=20),
+                            interpolate=TRUE,i_factor=10) {
+    # plot fraction bound AND predicted fraction bound from coefficients mycoef
+    
     # automatically add params to title
     newtitle <- paste(title,
                       "\nki=",round(mycoef[1],3),
                       ", k12=",round(mycoef[2],3),
                       ", conc.min=",round(mycoef[3],1),sep="")
-    plot_fbound(fbound_df, newtitle) + 
-        geom_line(aes(y=predicted_fbound),linetype="dashed")
+    
+    if (!interpolate) {
+        # predicted fbound with supplied concentrations only
+        fbound_pred_df <- fbound_df
+        fbound_pred_df$fraction_bound <- NULL
+    } else {
+        # smoother predicted fbound with intermediate concentrations
+        fbound_pred_df <- ddply(fbound_df,~n_prot, function(df) {
+            minconc <- min(fbound_df$conc[fbound_df$conc > 0])
+            maxconc <- max(fbound_df$conc[fbound_df$conc > 0])
+            # i_factor times as many points as the original data, evenly on logscale
+            npoints <- i_factor * nrow(df)
+            concout <- c(0,exp(seq(log(minconc),log(maxconc), length.out=npoints)))
+            data.frame(conc=concout)
+            })
+        }
+    # calculate predicted fbound
+   fbound_pred_df$fraction_bound <- with(fbound_pred_df,combined_fit_natscale(conc,n_prot,
+                                           ki=mycoef[1],k12=mycoef[2],conc.min=mycoef[3]))
+            
+   plot_fbound(fbound_df, newtitle) + 
+            geom_line(data=fbound_pred_df,linetype="dashed")
+}
+
+plot_fbound_residuals <- function(fbound_df, title="fbound vs protein concentration",
+                                  mycoef=c(ki=0.01,k12=1,conc.min=20),
+                                  interpolate=TRUE,i_factor=10) {
+    # plot fraction bound AND predicted fraction bound from coefficients mycoef
+    
+    # automatically add params to title
+    newtitle <- paste(title,
+                      "\nki=",round(mycoef[1],3),
+                      ", k12=",round(mycoef[2],3),
+                      ", conc.min=",round(mycoef[3],1),sep="")
+    # calculate predicted fbound
+    fbound_df$predicted_fraction_bound <- with(fbound_df,combined_fit_natscale(conc,n_prot,
+                                     ki=mycoef[1],k12=mycoef[2],conc.min=mycoef[3]))
+    
+    ggplot(data=fbound_df,aes(x=conc,y=fraction_bound-predicted_fraction_bound,colour=factor(n_prot))) +
+        geom_point() +
+        scale_x_log10() +
+        scale_colour_manual("n bound", values=c("0"="red","1"="blue","2"="green2")) +
+        labs(title=newtitle,x="concentration (uM?)",y="Dfbound, obs. - pred.")
     }
 
 # test function and fit with arbitrary parameters   
 plot_fbound_fit(erre61pal_df,"AncERR ERRE61Pal") 
+plot_fbound_residuals(erre61pal_df,"AncERR ERRE61Pal") 
 ```
 
 ## Fit the data by nls and plot the fit
@@ -109,13 +152,13 @@ start_param <- data.frame(ki=0.01,k12=1,conc.min=20)
 fit_combined_Gmin_nls2 <- nls2(combined_model,start=start_param,data=erre61pal_df,
                                control=nls.control(warnOnly=TRUE, maxiter=1000))
 
-plot_fbound_fit(erre61pal_df,"AncERR ERRE61Pal, nls fit",mycoef=coef(fit_combined_Gmin_nls2)) 
+plot_fbound_fit(erre61pal_df,"AncERR ERRE61Pal, nls fit",mycoef=coef(fit_combined_Gmin_nls2))
+plot_fbound_residuals(erre61pal_df,"AncERR ERRE61Pal, nls fit",mycoef=coef(fit_combined_Gmin_nls2))
 
 ```
 
 ## Do next
 * Simulate data with noise
-* Plot residuals
 * Try not-sum-normalized data
 
 
